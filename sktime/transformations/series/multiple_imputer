@@ -1,0 +1,83 @@
+#!/usr/bin/env python3 -u
+# -*- coding: utf-8 -*-
+# copyright: sktime developers, BSD-3-Clause License (see LICENSE file)
+"""Transformer to impute missing values in series."""
+
+__author__ = ["eenticott-shell"]
+__all__ = ["Multiple_Imputer"]
+
+import numpy as np
+import pandas as pd
+from sklearn.utils import check_random_state
+
+from sktime.forecasting.base import ForecastingHorizon
+from sktime.forecasting.trend import PolynomialTrendForecaster
+from sktime.transformations.base import BaseTransformer
+from sktime.transformations.series.impute import Imputer
+from sklearn.linear_model import LinearRegression
+
+class MultipleImputer(BaseTransformer):
+     """
+     Implements multiple imputation
+     """
+     _tags = {
+        "scitype:transform-input": "Series",
+        # what is the scitype of X: Series, or Panel
+        "scitype:transform-output": "Series",
+        # what scitype is returned: Primitives, Series, Panel
+        "scitype:instancewise": True,  # is this an instance-wise transform?
+        "X_inner_mtype": ["pd.DataFrame"],
+        # which mtypes do _fit/_predict support for X?
+        "y_inner_mtype": "None",  # which mtypes do _fit/_predict support for y?
+        "fit_is_empty": False,
+        "handles-missing-data": True,
+        "skip-inverse-transform": True,
+        "capability:inverse_transform": True,
+        "univariate-only": False,
+        "capability:missing_values:removes": True,
+        # is transform result always guaranteed to contain no missing values?
+        "remember_data": False,  # remember all data seen as _X
+    }
+     
+     def __init__(
+        self
+     ):
+          super().__init__()
+
+     def _fit(self, X, y=None):
+          return(self)
+     
+     def _transform(self, X, y = None):
+       self.missingvalues = X.isnull()
+
+       if not _has_missing_values(X):
+        return X
+       
+       meanimputer = Imputer(method="mean")
+     # Fill in missing with mean to start
+       X_init = meanimputer.transform(X)
+
+       lin_reg = LinearRegression()
+
+     # For each column fit a linear regression to other columns 
+     # Predict for the values that were NA and 
+     dist = 1
+     X_old = X_init
+     while dist > 10^-3:
+        X_cur = copy(X_old)
+        for col in X.columns:
+            # Fit 
+            lin_reg.fit(X[col], X[-col])
+            # gen random normal based on lin reg
+            X_cur[self.missingvalues, col] = np.random.normal(lin_reg.predict(X[self.missingvalues, col]), lin_reg.get_params("var"))
+        dist = self._calc_dist(X_old, X_cur)
+
+       
+
+    def _has_missing_values(X):
+        return X.isnull().to_numpy().any()
+
+    def _calc_dist(X_old, X_cur):
+        # Find quantiles of 
+
+       
