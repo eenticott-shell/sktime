@@ -14,6 +14,7 @@ from sktime.forecasting.base import ForecastingHorizon
 from sktime.forecasting.trend import PolynomialTrendForecaster
 from sktime.transformations.base import BaseTransformer
 
+from sklearn.linear_model import LinearRegression
 
 class Imputer(BaseTransformer):
     """Missing value imputation.
@@ -389,3 +390,159 @@ class Imputer(BaseTransformer):
 
 def _has_missing_values(X):
     return X.isnull().to_numpy().any()
+
+class MultipleImputer(BaseTransformer):
+    """Multiple imputation.
+
+    The Imputer transforms input series by generating multiple sets with missing values 
+    replaced by plausible imputed values. Each data set should be analysed independently and 
+    the results combined.
+
+    Parameters
+    ----------
+    init_method : str, default="ffill"
+        Which method from Imputer class should be used to initialise the missing values.
+    num_samples : int, default=1
+        The number of sample data frames to generate.
+    num_iters : int, default=1
+        The number of monte carlo steps to perform
+    missing_values : int/float/str, default=None
+        The placeholder for the missing values. All occurrences of
+        missing_values will be imputed, in addition to np.nan.
+        If None, then only np.nan values are imputed.
+    random_state : int/float/str, optional
+        Value to set random.seed() if method="random", default None
+    """
+    _tags = {
+    "scitype:transform-input": "Series",
+    # what is the scitype of X: Series, or Panel
+    "scitype:transform-output": "Series",
+    # what scitype is returned: Primitives, Series, Panel
+    "scitype:instancewise": True,  # is this an instance-wise transform?
+    "X_inner_mtype": ["pd.DataFrame"],
+    # which mtypes do _fit/_predict support for X?
+    "y_inner_mtype": "None",  # which mtypes do _fit/_predict support for y?
+    "fit_is_empty": False,
+    "handles-missing-data": True,
+    "skip-inverse-transform": True,
+    "capability:inverse_transform": True,
+    "univariate-only": True,
+    "capability:missing_values:removes": True,
+    # is transform result always guaranteed to contain no missing values?
+    "remember_data": False,  # remember all data seen as _X
+}
+
+    def __init__(
+        self,
+        init_method="ffill",
+        num_samples=1,
+        num_iters=1,
+        missing_values=None,
+        random_state=None,
+    ):
+        self.init_method = init_method
+        self.num_samples = num_samples
+        self.num_iters = num_iters
+        self.missing_values = missing_values
+        self.random_state = random_state
+        super(MultipleImputer, self).__init__()
+
+    def _fit(self, X, y=None):
+        """Fit transformer to X and y.
+
+        private _fit containing the core logic, called from fit
+
+        Parameters
+        ----------
+        X : Series or Panel of mtype X_inner_mtype
+            if X_inner_mtype is list, _fit must support all types in it
+            Data to fit transform to
+        y : Series or Panel of mtype y_inner_mtype, default=None
+            Additional data, e.g., labels for transformation
+
+        Returns
+        -------
+        self: reference to self
+        """
+        
+        self.na_coords = np.where(X.isna())
+        self.ncol = X.shape[1]
+        return(self)
+
+    def _transform(self, X, y=None):
+        """Transform X and return a transformed version.
+
+        private _transform containing the core logic, called from transform
+
+        Parameters
+        ----------
+        X : pd.Series or pd.DataFrame
+            Data to be transformed
+        y : ignored argument for interface compatibility
+            Additional data, e.g., labels for transformation
+
+        Returns
+        -------
+        list_of_samples : list of imputed X, same type as X
+            transformed version of X
+        """
+        X = X.copy()
+
+        # replace missing_values with np.nan
+        if self.missing_values:
+            X = X.replace(to_replace=self.missing_values, value=np.nan)
+
+        if not _has_missing_values(X):
+            return X
+        mod = LinearRegression()
+
+        # initialise 
+        init_imputer = Imputer(self.init_method)
+        X_init = init_imputer.fit_transform(X)
+        na_coords = self.na_coords
+        list_of_samples = [0]*self.num_samples
+        # Generate multiple imputed data sets
+        for k in range(self.num_samples):
+            X_old = X_init
+            for j in range(self.num_iters):
+                for i in range(self.ncol):
+                    # lin reg current col against others
+                    y_cur = X_old.loc[:, i]
+                    X_cur = X_old.drop(i, axis = 1)
+                    # Which rows have NAs in current column
+                    cur_nas = na_coords[0][na_coords[1] == i]
+                    mod.fit(y=y_cur, X = X_cur)
+                    X_sim = np.random.normal(loc = mod.predict(X_old.iloc[cur_nas].drop(i,axis=1)), 
+                        scale = np.std(mod.predict(X_cur) - y_cur))
+                    X_old.iloc[cur_nas,i] = X_sim
+            list_of_samples[k] = X_cur
+        print(list_of_samples)
+        return(list_of_samples[1])
+
+    @classmethod
+    def get_test_params(cls, parameter_set="default"):
+        """Return testing parameter settings for the estimator.
+
+        Parameters
+        ----------
+        parameter_set : str, default="default"
+            Name of the set of test parameters to return, for use in tests. If no
+            special parameters are defined for a value, will return `"default"` set.
+
+
+        Returns
+        -------
+        params : dict or list of dict, default = {}
+            Parameters to create testing instances of the class
+            Each dict are parameters to construct an "interesting" test instance, i.e.,
+            `MyClass(**params)` or `MyClass(**params[i])` creates a valid test instance.
+            `create_test_instance` uses the first (or only) dictionary in `params`
+        """
+        from sktime.forecasting.trend import TrendForecaster
+
+        return [
+            {"init_method": "ffill"},
+        ]
+            
+
+    
